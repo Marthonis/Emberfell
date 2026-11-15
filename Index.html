@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#18251b">
+<title>Emberfall — Forest Lumberjack</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<style>
+:root{--ink:#f3edcf;--gold:#e4c46e;--muted:#b6c0a8;--panel:#17251feF}
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#111a14;color:var(--ink);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;touch-action:none}
+#game{position:relative;width:100%;height:100%;max-width:960px;margin:auto;overflow:hidden;background:#35563a}canvas{width:100%;height:100%;display:block;image-rendering:pixelated}
+.panel{background:var(--panel);border:2px solid #71815d;border-radius:8px;padding:7px 9px;box-shadow:0 3px 0 #0a120d;font-size:11px;line-height:1.4}
+#hud{position:absolute;top:env(safe-area-inset-top,6px);left:7px;right:7px;display:flex;justify-content:space-between;gap:6px;pointer-events:none}
+#stats{min-width:190px}#stats b{color:var(--gold)}#tools{display:flex;gap:5px;pointer-events:auto;align-items:flex-start}button{font:inherit;color:var(--ink);background:#344d38;border:2px solid #89966c;border-radius:7px;padding:8px 10px;box-shadow:0 2px 0 #0a120d}button:active{transform:translateY(2px);box-shadow:none}#tools button{padding:7px 8px}
+#bottom{position:absolute;bottom:calc(env(safe-area-inset-bottom,6px) + 7px);left:7px;right:7px;display:flex;justify-content:space-between;align-items:end;pointer-events:none;gap:8px}
+#pad{display:grid;grid-template-columns:48px 48px 48px;grid-template-rows:48px 48px 48px;gap:4px;pointer-events:auto;touch-action:none}#pad button{padding:0;font-size:21px;background:#18271ff2;touch-action:none;user-select:none;-webkit-user-select:none}
+#pad .up{grid-column:2}#pad .left{grid-column:1;grid-row:2}#pad .down{grid-column:2;grid-row:2}#pad .right{grid-column:3;grid-row:2}
+#actions{display:flex;gap:6px;pointer-events:auto}#actions button{min-width:75px;min-height:52px;font-weight:bold;font-size:10px;touch-action:manipulation}#chop{background:#70502e;border-color:#d5ae64}
+#status{position:absolute;left:50%;bottom:115px;transform:translateX(-50%);white-space:nowrap;font-size:10px;background:#142019eF;border:1px solid #84926a;border-radius:6px;padding:6px 9px;pointer-events:none}
+#toast{position:absolute;top:45%;left:50%;transform:translate(-50%,-50%);background:#15241ded;border:2px solid var(--gold);border-radius:8px;padding:10px 14px;text-align:center;font-size:12px;max-width:88%;opacity:0;transition:opacity .2s;pointer-events:none}
+#modal{position:absolute;inset:0;background:#07110dc9;display:none;align-items:center;justify-content:center;padding:16px;z-index:5}#modal.show{display:flex}
+.window{width:min(440px,100%);max-height:82%;overflow:auto;background:#1b2b22;border:3px solid #9b9a67;border-radius:10px;padding:14px;box-shadow:0 8px 0 #0a120d}
+.window h2{margin:0 0 8px;color:var(--gold);font-size:17px}.window p{font-size:12px;line-height:1.5;color:#d8ddc7}.line{display:flex;justify-content:space-between;align-items:center;gap:8px;border-top:1px solid #455944;padding:9px 0;font-size:12px}.line button{white-space:nowrap}
+.meter{height:7px;background:#3b342b;border:1px solid #786a4d;border-radius:4px;overflow:hidden;margin:4px 0}.meter span{display:block;height:100%;background:#d0ae57}
+@media(min-width:700px){#game{border-left:2px solid #657b54;border-right:2px solid #657b54}}
+</style>
+</head>
+<body><div id="game">
+<canvas id="world"></canvas>
+<div id="hud">
+ <div class="panel" id="stats">
+  <div><b>FOREST OUTPOST</b> · <span id="skill">Lumberjacking 1</span></div>
+  <div>Progress: <span id="progress">0 / 100</span> chops</div><div class="meter"><span id="xpbar" style="width:0%"></span></div>
+  <div>Axe: <span id="durability">100 / 100</span> · Load: <span id="weight">0 / 100 lb</span></div>
+  <div>Purse: <span id="money">0c · 0s · 0g</span></div>
+ </div>
+ <div id="tools"><button onclick="openPanel('bag')">Bag</button><button onclick="openPanel('skill')">Skill</button><button onclick="openPanel('help')">☰</button></div>
+</div>
+<div id="status">Walk to a tree and tap CHOP · Cart is on the southern road</div>
+<div id="toast"></div>
+<div id="bottom">
+ <div id="pad"><button class="up" data-dir="up">▲</button><button class="left" data-dir="left">◀</button><button class="down" data-dir="down">▼</button><button class="right" data-dir="right">▶</button></div>
+ <div id="actions"><button id="chop" onclick="chop()">CHOP TREE</button><button onclick="interact()">INTERACT</button></div>
+</div>
+<div id="modal"><div class="window"><div id="content"></div><div style="display:flex;justify-content:flex-end;margin-top:12px"><button onclick="closePanel()">Close</button></div></div></div>
+</div>
+<script>
+(()=>{
+const canvas=document.getElementById('world'),ctx=canvas.getContext('2d'),T=32,MW=48,MH=38;
+let W=0,H=0,camX=0,camY=0,last=0,moveHold=null,keys={},toastTimer;
+const dpr=()=>Math.min(devicePixelRatio||1,2);
+function resize(){
+ const r=canvas.getBoundingClientRect();
+ W=Math.max(1,Math.floor(r.width||window.innerWidth));
+ H=Math.max(1,Math.floor(r.height||window.innerHeight));
+ canvas.width=Math.round(W*dpr());canvas.height=Math.round(H*dpr());
+ ctx.setTransform(dpr(),0,0,dpr(),0,0);
+}
+if('ResizeObserver' in window)new ResizeObserver(resize).observe(canvas);
+window.addEventListener('resize',resize);window.addEventListener('orientationchange',()=>setTimeout(resize,150));resize();
+let player={x:24*T,y:20*T,dir:'down'};
+let skill=1,chops=0,axe=100,logs=0,copper=0,silver=0,gold=0;
+const MAX_WEIGHT=100,LOG_WEIGHT=100,AXE_MAX=100;
+let trees=[],roadY=31,cart={x:24*T,y:roadY*T+15},vendor={x:27*T,y:roadY*T+15};
+const now=()=>Date.now();
+function makeTrees(){trees=[];let spots=[[5,5],[10,6],[16,5],[22,6],[30,5],[37,6],[43,5],[6,13],[12,12],[18,11],[31,12],[39,13],[44,17],[7,22],[13,23],[19,25],[31,22],[38,24],[44,25],[3,28],[10,27],[17,28],[34,27],[42,28]];spots.forEach(([x,y],i)=>trees.push({id:i,x:x*T+16,y:y*T+16,hp:10,downUntil:0}))}
+makeTrees();
+function save(){localStorage.setItem('emberfall-forest-save',JSON.stringify({player,skill,chops,axe,logs,copper,silver,gold,trees}))}
+function load(){try{let s=JSON.parse(localStorage.getItem('emberfall-forest-save'));if(s){player=s.player||player;skill=s.skill||1;chops=s.chops||0;axe=s.axe??100;logs=s.logs||0;copper=s.copper||0; silver=s.silver||0;gold=s.gold||0;if(s.trees)trees=s.trees}}catch(e){}}
+load();
+if(!player || !Number.isFinite(player.x) || !Number.isFinite(player.y) ||
+   player.x < T || player.y < T || player.x > (MW-2)*T || player.y > (MH-2)*T) {
+ player={x:24*T,y:20*T,dir:'down'};
+}
+function toast(t){let e=document.getElementById('toast');e.textContent=t;e.style.opacity=1;clearTimeout(toastTimer);toastTimer=setTimeout(()=>e.style.opacity=0,1800)}
+function totalCopper(){return gold*10000+silver*100+copper}
+function setMoney(n){n=Math.max(0,n);gold=Math.floor(n/10000);silver=Math.floor(n%10000/100);copper=n%100}
+function weight(){return logs*LOG_WEIGHT}
+function needed(){return 100*Math.pow(2,skill-1)}
+function chopsPerTree(){return Math.max(1,11-skill)}
+function nearTree(){return trees.filter(t=>t.downUntil<=now()&&Math.hypot(t.x-player.x,t.y-player.y)<55).sort((a,b)=>Math.hypot(a.x-player.x,a.y-player.y)-Math.hypot(b.x-player.x,b.y-player.y))[0]}
+function nearVendor(){return Math.hypot(vendor.x-player.x,vendor.y-player.y)<75}
+function nearCart(){return Math.hypot(cart.x-player.x,cart.y-player.y)<85}
+function updateUI(){
+ document.getElementById('skill').textContent='Lumberjacking '+skill;
+ document.getElementById('progress').textContent=chops+' / '+needed();
+ document.getElementById('xpbar').style.width=Math.min(100,chops/needed()*100)+'%';
+ document.getElementById('durability').textContent=axe+' / '+AXE_MAX;
+ document.getElementById('weight').textContent=weight()+' / '+MAX_WEIGHT+' lb';
+ document.getElementById('money').textContent=copper+'c · '+silver+'s · '+gold+'g';
+}
+function fell(t){
+ t.downUntil=now()+300000;t.hp=10;
+ if(weight()+LOG_WEIGHT<=MAX_WEIGHT){logs++;toast('Tree felled! +1 log (100 lb).')}
+ else toast('Tree felled, but your bag is full. The log was left behind.');
+}
+function chop(){
+ let t=nearTree();if(!t){toast('Move closer to a standing tree.');return}
+ if(axe<=0){toast('Your axe is broken. Visit the cart-side repair vendor.');return}
+ t.hp--;axe=Math.max(0,axe-1);chops++;
+ if(chops>=needed()){chops-=needed();skill++;toast('Lumberjacking increased to level '+skill+'! Trees now take '+chopsPerTree()+' chops.')}
+ if(t.hp<=0)fell(t);else toast('Chop! '+t.hp+' hits left on this tree.');
+ updateUI();save();
+}
+function sell(){if(logs<=0){toast('You have no logs to sell.');return}let n=logs;logs=0;setMoney(totalCopper()+n*100);toast('Sold '+n+' log(s) for '+n+' silver.');updateUI();save();openPanel('vendor')}
+function repair(){if(axe===AXE_MAX){toast('Your axe is already in perfect condition.');return}
+ let missing=AXE_MAX-axe,cost=Math.max(1,Math.ceil(missing/10));if(totalCopper()<cost*100){toast('You need '+cost+' silver to repair your axe.');return}
+ setMoney(totalCopper()-cost*100);axe=AXE_MAX;toast('Axe repaired to full durability.');updateUI();save();openPanel('vendor')}
+function interact(){if(nearVendor()||nearCart()){openPanel('vendor');return}let t=nearTree();if(t){chop();return}toast('Nothing to interact with nearby.')}
+function move(dx,dy,dt){let speed=125*dt,nx=player.x+dx*speed,ny=player.y+dy*speed;
+ // Water is the impassable border; road is walkable.
+ const blocked=(x,y)=>{let tx=Math.floor(x/T),ty=Math.floor(y/T);return tx<1||ty<1||tx>=MW-1||ty>=MH-1};
+ if(!blocked(nx,player.y))player.x=nx;if(!blocked(player.x,ny))player.y=ny;
+ if(dx)player.dir=dx>0?'right':'left';if(dy)player.dir=dy>0?'down':'up';
+}
+function tile(x,y){if(x<0||y<0||x>=MW||y>=MH)return'water';if(y===roadY)return'road';return 'grass'}
+function drawTile(x,y){let px=x*T-camX,py=y*T-camY,kind=tile(x,y);
+ ctx.fillStyle=kind==='road'?'#9a8055':'#527c43';ctx.fillRect(px,py,T,T);
+ if(kind==='road'){ctx.fillStyle='#b49a69';ctx.fillRect(px+5,py+8,3,2);ctx.fillRect(px+20,py+22,5,2);ctx.fillStyle='#806944';ctx.fillRect(px,py,32,2)}
+ else{ctx.fillStyle='#6a9550';ctx.fillRect(px+((x*7+y*11)%25)+3,py+((x*13+y*5)%24)+3,2,3)}
+}
+function treeSprite(t){let x=t.x-camX,y=t.y-camY;
+ ctx.fillStyle='#1c2a1c';ctx.fillRect(x-12,y+12,24,5);
+ ctx.fillStyle='#69472c';ctx.fillRect(x-5,y-1,10,22);
+ ctx.fillStyle='#285436';ctx.fillRect(x-16,y-20,32,25);ctx.fillStyle='#397044';ctx.fillRect(x-12,y-28,24,15);ctx.fillStyle='#4e8950';ctx.fillRect(x-6,y-32,12,9);
+ ctx.fillStyle='#1e422b';ctx.fillRect(x-10,y-15,5,5);ctx.fillRect(x+4,y-22,5,5);
+ ctx.fillStyle='#f2df9d';ctx.font='9px monospace';ctx.textAlign='center';ctx.fillText(t.hp+'/10',x,y-38);
+}
+function stump(x,y){let px=x-camX,py=y-camY;ctx.fillStyle='#65452c';ctx.fillRect(px-8,py-4,16,9);ctx.fillStyle='#b48a54';ctx.fillRect(px-6,py-5,12,4);ctx.fillStyle='#dfbd7c';ctx.fillRect(px-3,py-4,6,2)}
+function person(x,y,kind){let px=x-camX,py=y-camY;ctx.fillStyle='#19241b';ctx.fillRect(px-9,py+11,18,4);
+ if(kind==='vendor'){ctx.fillStyle='#7b4632';ctx.fillRect(px-8,py-12,16,23);ctx.fillStyle='#e0b88c';ctx.fillRect(px-6,py-22,12,11);ctx.fillStyle='#d3b75c';ctx.fillRect(px-9,py-26,18,5);ctx.fillStyle='#4a3025';ctx.fillRect(px-7,py-28,14,4)}
+ else if(kind==='player'){
+  // High-contrast, enlarged adventurer sprite for small phone screens.
+  ctx.fillStyle='#142016';ctx.fillRect(px-12,py+12,24,5);
+  ctx.fillStyle='#241b16';ctx.fillRect(px-9,py+5,7,10);ctx.fillRect(px+2,py+5,7,10);
+  ctx.fillStyle='#3a2920';ctx.fillRect(px-10,py+13,8,4);ctx.fillRect(px+2,py+13,8,4);
+  ctx.fillStyle='#172333';ctx.fillRect(px-12,py-13,24,21);
+  ctx.fillStyle='#547fae';ctx.fillRect(px-10,py-12,20,17);
+  ctx.fillStyle='#d8bd83';ctx.fillRect(px-12,py+1,24,4);
+  ctx.fillStyle='#e8bd94';ctx.fillRect(px-9,py-29,18,17);
+  ctx.fillStyle='#493022';ctx.fillRect(px-10,py-33,20,7);ctx.fillRect(px-9,py-29,4,5);ctx.fillRect(px+5,py-29,4,5);
+  ctx.fillStyle='#34251d';ctx.fillRect(px-6,py-23,3,3);ctx.fillRect(px+3,py-23,3,3);
+  ctx.fillStyle='#f1e7c5';ctx.font='bold 10px monospace';ctx.textAlign='center';
+  ctx.fillText('YOU',px,py-39);
+}
+ else{ctx.fillStyle='#76502e';ctx.fillRect(px-10,py-4,20,9);ctx.fillStyle='#4a3928';ctx.fillRect(px-8,py-12,16,8);ctx.fillStyle='#76502e';ctx.fillRect(px-13,py-13,5,11);ctx.fillRect(px+8,py-13,5,11);ctx.fillStyle='#b99a62';ctx.fillRect(px-15,py-17,30,5);ctx.fillStyle='#513c29';ctx.fillRect(px-13,py-22,26,7);ctx.fillStyle='#69482e';ctx.fillRect(px-16,py-14,4,13);ctx.fillRect(px+12,py-14,4,13)}
+}
+function draw(){
+ camX=Math.max(0,Math.min(MW*T-W,player.x-W/2));camY=Math.max(0,Math.min(MH*T-H,player.y-H/2));
+ ctx.clearRect(0,0,W,H);let sx=Math.floor(camX/T),sy=Math.floor(camY/T),ex=Math.ceil((camX+W)/T),ey=Math.ceil((camY+H)/T);
+ for(let y=sy;y<=ey;y++)for(let x=sx;x<=ex;x++)drawTile(x,y);
+ // roadside cart and vendor, drawn at southern road
+ person(cart.x,cart.y,'cart');person(vendor.x,vendor.y,'vendor');
+ ctx.fillStyle='#f3e5b5';ctx.font='10px monospace';ctx.textAlign='center';ctx.fillText('LOG BUYER',vendor.x-camX,vendor.y-camY-34);
+ for(let t of trees){if(t.downUntil>now()){stump(t.x,t.y);let remain=Math.ceil((t.downUntil-now())/1000);if(remain<300&&Math.hypot(t.x-player.x,t.y-player.y)<130){ctx.fillStyle='#f4dba0';ctx.fillText(Math.floor(remain/60)+':'+String(remain%60).padStart(2,'0'),t.x-camX,t.y-camY-13)}}else treeSprite(t)}
+ person(player.x,player.y,'player');
+ let t=nearTree();if(t){ctx.fillStyle='#fff0bd';ctx.fillText('TREE · '+t.hp+' CHOPS LEFT',t.x-camX,t.y-camY-47)}
+}
+function loop(ts){let dt=Math.min(.04,(ts-last)/1000||0);last=ts;let dx=0,dy=0;if(keys.left||keys.a)dx--;if(keys.right||keys.d)dx++;if(keys.up||keys.w)dy--;if(keys.down||keys.s)dy++;if(moveHold){dx+=moveHold.x;dy+=moveHold.y}if(dx||dy){let l=Math.hypot(dx,dy);move(dx/l,dy/l,dt)}draw();requestAnimationFrame(loop)}
+requestAnimationFrame(loop);
+const directionButtons=document.querySelectorAll('[data-dir]');
+const directions={up:[0,-1],down:[0,1],left:[-1,0],right:[1,0]};
+function stopMoving(){moveHold=null}
+ directionButtons.forEach(b=>{
+  const v=directions[b.dataset.dir];
+  const startMove=e=>{e.preventDefault();moveHold={x:v[0],y:v[1]};if(e.pointerId!==undefined&&b.setPointerCapture){try{b.setPointerCapture(e.pointerId)}catch(_){} }};
+  b.addEventListener('pointerdown',startMove,{passive:false});
+  b.addEventListener('touchstart',startMove,{passive:false});
+  ['pointerup','pointercancel','lostpointercapture','touchend','touchcancel','mouseleave'].forEach(ev=>b.addEventListener(ev,stopMoving));
+ });
+ window.addEventListener('pointerup',stopMoving);window.addEventListener('touchend',stopMoving,{passive:true});
+ // Keep taps responsive in mobile Safari and prevent page gestures stealing movement input.
+ document.getElementById('game').addEventListener('touchmove',e=>e.preventDefault(),{passive:false});
+window.addEventListener('keydown',e=>{let k=e.key.toLowerCase();keys[{arrowup:'up',arrowdown:'down',arrowleft:'left',arrowright:'right'}[k]||k]=true;if(k===' '||k==='e')interact()});window.addEventListener('keyup',e=>{let k=e.key.toLowerCase();keys[{arrowup:'up',arrowdown:'down',arrowleft:'left',arrowright:'right'}[k]||k]=false});
+function openPanel(which){
+ let c=document.getElementById('content'),html='';
+ if(which==='bag')html='<h2>Inventory</h2><p>Carrying capacity: '+weight()+' / '+MAX_WEIGHT+' lb. Each log weighs 100 lb, so your pack holds one log.</p><div class="line"><span>Logs</span><b>'+logs+' · '+weight()+' lb</b></div><div class="line"><span>Axe durability</span><b>'+axe+'/100</b></div><div class="line"><span>Coins</span><b>'+copper+' copper · '+silver+' silver · '+gold+' gold</b></div>';
+ if(which==='skill')html='<h2>Lumberjacking</h2><p>Current skill: <b>Level '+skill+'</b></p><p>Chops toward next level: <b>'+chops+' / '+needed()+'</b></p><div class="meter"><span style="width:'+Math.min(100,chops/needed()*100)+'%"></span></div><p>At level '+skill+', each tree takes <b>'+chopsPerTree()+' chops</b>. Each successful chop gives one skill point. The next level requires twice as many chops as the previous level.</p><p>Level 1→2: 100 · 2→3: 200 · 3→4: 400 · 4→5: 800 · and so on. Tree chop requirement bottoms out at 1.</p>';
+ if(which==='vendor')html='<h2>Roadside Timber Buyer</h2><p>A horse team and sturdy cart wait on the southern road. The buyer offers <b>1 silver per log</b>.</p><div class="line"><span>Logs in your bag</span><b>'+logs+'</b></div><div class="line"><span>Sell all logs</span><button onclick="sell()">SELL · '+logs+' silver</button></div><div class="line"><span>Axe condition</span><b>'+axe+'/100</b></div><div class="line"><span>Repair axe</span><button onclick="repair()">REPAIR · '+Math.max(1,Math.ceil((100-axe)/10))+' silver</button></div><p>Repair cost is 1 silver per 10 durability restored, rounded up. A full repair restores 100 durability.</p>';
+ if(which==='help')html='<h2>Forest Outpost — How to Play</h2><p><b>Move:</b> on-screen arrows or WASD / arrow keys.</p><p><b>Chop:</b> stand beside a tree and tap CHOP TREE. Each chop reduces the tree by one hit and axe durability by one.</p><p><b>Regrowth:</b> felled trees regrow after five real-world minutes, even if you leave the game closed.</p><p><b>Carry:</b> 100 lb capacity. A log weighs 100 lb, so you can carry one. If full, the felled tree\'s log is left behind.</p><p><b>Sell / repair:</b> visit the vendor beside the horse cart on the east-west road at the south of the map. Logs sell for 1 silver each.</p><p><b>Currency:</b> 100 copper = 1 silver; 100 silver = 1 gold.</p><p><b>Saving:</b> your progress is saved in this browser on this device.</p>';
+ c.innerHTML=html;document.getElementById('modal').classList.add('show')
+}
+function closePanel(){document.getElementById('modal').classList.remove('show');save()}
+window.openPanel=openPanel;window.closePanel=closePanel;window.chop=chop;window.interact=interact;window.sell=sell;window.repair=repair;
+updateUI();setInterval(()=>{updateUI();save()},5000);
+})();
+</script></div></body></html>
